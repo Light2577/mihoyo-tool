@@ -1,0 +1,228 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 740 600" width="740" height="600">
+  <defs>
+    <!-- 柔和投影 -->
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="10" flood-color="#000000" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+
+  <style>
+    text {
+      font-family: "Microsoft YaHei", "Consolas", monospace, sans-serif;
+      user-select: none;
+    }
+
+    :root {
+      --anim-duration: 8s;
+      --blue-color: #87CEEB;
+    }
+
+    /* --- 动画关键帧 --- */
+
+    /* 1. 状态文字切换 */
+    @keyframes fadeIdle {
+      0%, 15% { opacity: 1; }
+      16%, 100% { opacity: 0; }
+    }
+    @keyframes fadeRunning {
+      0%, 15% { opacity: 0; }
+      16%, 74% { opacity: 1; }
+      75%, 100% { opacity: 0; }
+    }
+    @keyframes fadeSuccess {
+      0%, 74% { opacity: 0; }
+      75%, 95% { opacity: 1; }
+      96%, 100% { opacity: 0; }
+    }
+
+    /* 2. 按钮点击效果 (Scale) */
+    /* 注意：这只改变缩放，位置由外层 Group 控制 */
+    @keyframes btnPress {
+      0%, 15% { transform: scale(1); }
+      17% { transform: scale(0.96); } 
+      19% { transform: scale(1); }
+      100% { transform: scale(1); }
+    }
+
+    /* 3. 进度条 */
+    @keyframes progressFill {
+      0%, 18% { width: 0; }
+      74% { width: 280px; }
+      95% { width: 280px; }
+      100% { width: 0; }
+    }
+
+    /* 4. 打字机效果 (逐行显现) */
+    @keyframes typeLine1 {
+      0%, 20% { width: 0; }
+      30%, 100% { width: 200px; } 
+    }
+    @keyframes typeLine2 {
+      0%, 35% { width: 0; }
+      45%, 100% { width: 200px; } 
+    }
+    @keyframes typeLine3 {
+      0%, 50% { width: 0; }
+      65%, 100% { width: 200px; } 
+    }
+    
+    /* 5. 光标闪烁与移动 */
+    @keyframes cursorBlink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+    @keyframes cursorMove {
+      0%, 19% { transform: translate(10px, 45px); opacity: 0;} 
+      20% { transform: translate(10px, 45px); opacity: 1;} 
+      30% { transform: translate(130px, 45px); } 
+      35% { transform: translate(10px, 70px); } 
+      45% { transform: translate(130px, 70px); } 
+      50% { transform: translate(10px, 95px); } 
+      65% { transform: translate(150px, 95px); } 
+      75%, 100% { transform: translate(150px, 95px); opacity: 0; } 
+    }
+
+    /* --- 应用类 --- */
+    .state-idle { animation: fadeIdle var(--anim-duration) infinite; }
+    .state-running { animation: fadeRunning var(--anim-duration) infinite; }
+    .state-success { animation: fadeSuccess var(--anim-duration) infinite; }
+
+    /* 修复的关键：transform-origin 设为 center，且在子元素上应用动画，避免覆盖 translate */
+    .btn-anim-target { 
+      transform-origin: 130px 22.5px; /* 按钮中心点 */
+      animation: btnPress var(--anim-duration) infinite;
+    }
+    
+    .progress-fill-anim {
+      animation: progressFill var(--anim-duration) ease-in-out infinite;
+    }
+    
+    .clip-rect-1 { animation: typeLine1 var(--anim-duration) infinite steps(20); }
+    .clip-rect-2 { animation: typeLine2 var(--anim-duration) infinite steps(20); }
+    .clip-rect-3 { animation: typeLine3 var(--anim-duration) infinite steps(20); }
+    
+    .cursor {
+        animation: cursorMove var(--anim-duration) infinite, cursorBlink 0.8s infinite;
+    }
+
+  </style>
+
+  <!-- 背景 -->
+  <rect width="100%" height="100%" fill="#f0f2f5" />
+
+  <!-- === 左侧窗口: miHoYo Tool === -->
+  <g transform="translate(30, 30)">
+    
+    <!-- 窗口卡片背景 -->
+    <rect x="0" y="0" width="300" height="540" rx="15" ry="15" fill="#ffffff" filter="url(#shadow)" />
+
+    <!-- 窗口控件 -->
+    <g transform="translate(240, 20)" opacity="0.6">
+      <rect x="0" y="8" width="12" height="1.5" fill="#333" />
+      <path d="M25 4 L35 14 M35 4 L25 14" stroke="#333" stroke-width="1.5" stroke-linecap="round" />
+    </g>
+
+    <!-- 标题 -->
+    <text x="150" y="45" font-size="16" font-weight="bold" fill="#333" text-anchor="middle">miHoYo Tool</text>
+
+    <!-- 状态显示区 -->
+    <g transform="translate(150, 95)">
+      <g class="state-idle"><text y="0" font-size="26" font-weight="bold" fill="#333" text-anchor="middle">Waiting...</text></g>
+      <g class="state-running" opacity="0"><text y="0" font-size="26" font-weight="bold" fill="#333" text-anchor="middle">Running...</text></g>
+      <g class="state-success" opacity="0"><text y="0" font-size="26" font-weight="bold" fill="#4CAF50" text-anchor="middle">Success</text></g>
+    </g>
+
+    <!-- 进度条 -->
+    <g transform="translate(10, 115)">
+        <rect x="0" y="0" width="280" height="12" rx="4" fill="#F0F0F0" />
+        <rect class="progress-fill-anim" x="0" y="0" width="0" height="12" rx="4" fill="#87CEEB" />
+    </g>
+    
+    <!-- 副状态 -->
+    <g transform="translate(150, 150)">
+        <text class="state-idle" y="0" font-size="13" fill="#AAA" text-anchor="middle">Ready to start</text>
+        <text class="state-running" opacity="0" y="0" font-size="13" fill="#87CEEB" text-anchor="middle">Injecting...</text>
+        <text class="state-success" opacity="0" y="0" font-size="13" fill="#4CAF50" text-anchor="middle">Done</text>
+    </g>
+
+    <!-- 输入框列表 (y: 190, 245, 300, 355) -->
+    <g transform="translate(25, 190)">
+      <text x="0" y="22" font-size="13" fill="#555">基础延迟 (ms)</text>
+      <rect x="110" y="0" width="140" height="34" rx="6" fill="#F9F9F9" />
+      <text x="180" y="22" font-size="13" fill="#555" text-anchor="middle">10</text>
+    </g>
+    <g transform="translate(25, 245)">
+      <text x="0" y="22" font-size="13" fill="#555">随机浮动 (ms)</text>
+      <rect x="110" y="0" width="140" height="34" rx="6" fill="#F9F9F9" />
+      <text x="180" y="22" font-size="13" fill="#555" text-anchor="middle">5</text>
+    </g>
+    <g transform="translate(25, 300)">
+      <text x="0" y="22" font-size="13" fill="#555">开始热键</text>
+      <rect x="110" y="0" width="140" height="34" rx="6" fill="#F9F9F9" />
+      <text x="180" y="22" font-size="13" fill="#555" text-anchor="middle">F9</text>
+    </g>
+    <g transform="translate(25, 355)">
+      <text x="0" y="22" font-size="13" fill="#555">停止热键</text>
+      <rect x="110" y="0" width="140" height="34" rx="6" fill="#F9F9F9" />
+      <text x="180" y="22" font-size="13" fill="#555" text-anchor="middle">F10</text>
+    </g>
+
+    <!-- 按钮区域 (底部) -->
+    <!-- 修复：定位(transform)放在外层 Group，动画放在内层 Group，防止冲突 -->
+    
+    <!-- 开始运行按钮 -->
+    <g transform="translate(20, 420)">
+      <g class="btn-anim-target">
+        <rect x="0" y="0" width="260" height="45" rx="22.5" fill="#87CEEB" />
+        <g transform="translate(130, 28)">
+          <text class="state-idle" fill="white" font-size="15" font-weight="bold" text-anchor="middle">开始运行</text>
+          <text class="state-running" fill="white" font-size="15" font-weight="bold" text-anchor="middle" opacity="0">运行中 (F9)</text>
+          <text class="state-success" fill="white" font-size="15" font-weight="bold" text-anchor="middle" opacity="0">完成</text>
+        </g>
+      </g>
+    </g>
+    
+    <!-- 停止按钮 -->
+    <g transform="translate(20, 480)">
+      <rect x="0" y="0" width="260" height="45" rx="22.5" fill="#FFFFFF" stroke="#EEEEEE" stroke-width="1.5" />
+      <text x="130" y="28" fill="#DDD" font-size="15" font-weight="bold" text-anchor="middle">停止</text>
+    </g>
+  </g>
+
+  <!-- === 右侧窗口: 记事本演示 === -->
+  <g transform="translate(360, 60)">
+    
+    <!-- 记事本窗口框架 -->
+    <rect x="0" y="0" width="340" height="400" fill="#FFF" stroke="#CCC" stroke-width="1" filter="url(#shadow)" />
+    
+    <!-- 标题栏 -->
+    <rect x="0" y="0" width="340" height="30" fill="#FFF" />
+    <text x="10" y="20" font-size="12" fill="#333">无标题 - 记事本</text>
+    <line x1="0" y1="30" x2="340" y2="30" stroke="#EEE" />
+    
+    <!-- 窗口控制按钮 -->
+    <g transform="translate(270, 0)">
+        <text x="10" y="20" font-family="Arial" font-size="14" fill="#666" text-anchor="middle">-</text>
+        <rect x="30" y="10" width="10" height="10" stroke="#666" stroke-width="1" fill="none"/>
+        <text x="60" y="20" font-family="Arial" font-size="14" fill="#666" text-anchor="middle">x</text>
+    </g>
+
+    <!-- 内容区域 & 打字动画 -->
+    <g transform="translate(10, 40)">
+        <defs>
+            <clipPath id="clip1"><rect class="clip-rect-1" x="0" y="0" width="0" height="20" /></clipPath>
+            <clipPath id="clip2"><rect class="clip-rect-2" x="0" y="25" width="0" height="20" /></clipPath>
+            <clipPath id="clip3"><rect class="clip-rect-3" x="0" y="50" width="0" height="20" /></clipPath>
+        </defs>
+
+        <!-- 模拟逐行输入的文字 -->
+        <text x="0" y="15" font-family="Consolas" font-size="14" fill="#333" clip-path="url(#clip1)">Hello Traveler...</text>
+        <text x="0" y="40" font-family="Consolas" font-size="14" fill="#333" clip-path="url(#clip2)">Executing Script...</text>
+        <text x="0" y="65" font-family="Consolas" font-size="14" fill="#333" clip-path="url(#clip3)">Config Loaded OK.</text>
+
+        <!-- 闪烁并移动的光标 -->
+        <rect class="cursor" x="0" y="-12" width="2" height="16" fill="#333" />
+    </g>
+
+  </g>
+</svg>
