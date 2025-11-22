@@ -129,12 +129,13 @@ class PasteWorker(QThread):
         self.is_running = False
 
     def run(self):
+        # [修改] 英文倒计时
         for i in range(3, 0, -1):
             if not self.is_running: return
-            self.status_signal.emit(f"准备中... {i}")
+            self.status_signal.emit(f"Preparing... {i}")
             time.sleep(1)
 
-        self.status_signal.emit("正在输入...")
+        self.status_signal.emit("Typing...")
         total = len(self.content)
 
         if total == 0:
@@ -143,7 +144,8 @@ class PasteWorker(QThread):
 
         for i, char in enumerate(self.content):
             if not self.is_running:
-                self.status_signal.emit("已中断")
+                # [修改] 英文状态
+                self.status_signal.emit("Interrupted")
                 break
 
             InputSimulator.send_char(char)
@@ -152,17 +154,17 @@ class PasteWorker(QThread):
             if self.random_delay > 0:
                 current_delay_ms += random.randrange(0, self.random_delay)
 
-            # 使用忙等待以保证时间精度
             target_time = time.perf_counter() + (current_delay_ms / 1000.0)
             while time.perf_counter() < target_time:
                 pass
 
-            if i % 5 == 0 or i == total - 1:
-                progress = int(((i + 1) / total) * 100)
-                self.progress_signal.emit(progress)
+            # [关键修改] 移除 % 5 限制，每输入一个字符都更新进度，实现极致丝滑
+            progress = int(((i + 1) / total) * 100)
+            self.progress_signal.emit(progress)
 
         if self.is_running:
-            self.status_signal.emit("任务完成")
+            # [修改] 英文状态
+            self.status_signal.emit("Finished")
             self.progress_signal.emit(100)
 
         self.finished_signal.emit()

@@ -13,22 +13,31 @@ STYLESHEET = """
     QWidget#MainWidget { background-color: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 15px; }
     QLabel { font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; color: #555; font-size: 13px; }
     QLabel#TitleLabel { font-size: 16px; font-weight: bold; color: #333; }
+
+    /* 窗口控制按钮 */
     QPushButton#WinCtrlBtn { background: transparent; color: #999; border: none; font-size: 14px; border-radius: 15px; font-weight: bold; }
     QPushButton#WinCtrlBtn:hover { background-color: #F0F0F0; color: #333; }
     QPushButton#CloseBtn { background: transparent; color: #999; border: none; font-size: 18px; border-radius: 15px; }
     QPushButton#CloseBtn:hover { background-color: #FF6B6B; color: white; }
-    QLabel#StatusLabel { font-size: 24px; font-weight: bold; color: #333; }
-    QLabel#ResultLabel { color: #AAA; font-size: 12px; }
+
+    /* 进度条区域字体 (保持英文风格) */
+    QLabel#StatusLabel { font-family: "Segoe UI", sans-serif; font-size: 24px; font-weight: bold; color: #333; }
+    QLabel#ResultLabel { font-family: "Segoe UI", sans-serif; color: #87CEEB; font-size: 12px; } /* 使用了图片里的浅蓝色 */
+
     QLineEdit { border: 1px solid #EEE; border-radius: 8px; padding: 6px 10px; background: #F9F9F9; color: #555; selection-background-color: #87CEEB; }
     QLineEdit:focus { border: 1px solid #87CEEB; background: #FFF; }
+
     QPushButton#HotkeyBtn { border: 1px solid #EEE; border-radius: 8px; background: #F9F9F9; color: #333; padding: 6px; }
     QPushButton#HotkeyBtn:hover { border-color: #87CEEB; background: #F0F8FF; }
+
     QProgressBar { background: #F0F0F0; border: none; border-radius: 3px; height: 6px; }
     QProgressBar::chunk { background: #87CEEB; border-radius: 3px; }
+
     QPushButton#StartBtn { background: #87CEEB; color: white; border: none; border-radius: 22px; font-weight: bold; font-size: 14px; }
     QPushButton#StartBtn:hover { background: #76BEDB; }
     QPushButton#StartBtn:pressed { background: #5CA8C9; }
     QPushButton#StartBtn:disabled { background: #E0E0E0; color: #AAA; }
+
     QPushButton#StopBtn { background: white; color: #FF6B6B; border: 1px solid #FF6B6B; border-radius: 22px; font-weight: bold; font-size: 14px; }
     QPushButton#StopBtn:hover { background: #FFF0F0; }
     QPushButton#StopBtn:pressed { background: #FFE0E0; }
@@ -45,12 +54,12 @@ class HotkeyButton(QPushButton):
         self.setObjectName("HotkeyBtn")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.recording = False
-        self.setText("无")
+        self.setText("无")  # [恢复] 中文
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             self.recording = True
-            self.setText("请按键...")
+            self.setText("请按键...")  # [恢复] 中文
             self.grabKeyboard()
             self.setStyleSheet("border: 2px solid #87CEEB; color: #87CEEB; background-color: #F0F8FF;")
         super().mousePressEvent(e)
@@ -69,12 +78,11 @@ class HotkeyButton(QPushButton):
         if key in [Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta]:
             return
 
-        # 手动修正 F1-F12 键码
         if native_vk == 0:
             if Qt.Key.Key_F1 <= key <= Qt.Key.Key_F24:
                 native_vk = 0x70 + (key - Qt.Key.Key_F1)
             else:
-                self.setText("无效键")
+                self.setText("无效键")  # [恢复] 中文
                 return
 
         key_seq = QKeySequence(key)
@@ -125,7 +133,8 @@ class MainWindow(QMainWindow):
 
         self._create_title_bar(layout)
 
-        self.status_label = QLabel("Waiting...")
+        # --- 进度条区域 (保留英文) ---
+        self.status_label = QLabel("Waiting...")  # [保留] 英文状态
         self.status_label.setObjectName("StatusLabel")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addSpacing(10)
@@ -135,7 +144,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setTextVisible(False)
         layout.addWidget(self.progress_bar)
 
-        self.result_label = QLabel("Ready to start")
+        self.result_label = QLabel("Ready to start")  # [保留] 英文提示
         self.result_label.setObjectName("ResultLabel")
         self.result_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.result_label)
@@ -144,6 +153,7 @@ class MainWindow(QMainWindow):
         self._create_settings_area(layout)
         layout.addStretch()
 
+        # --- 底部按钮 (恢复中文) ---
         self.start_btn = QPushButton("开始运行")
         self.start_btn.setObjectName("StartBtn")
         self.start_btn.setFixedHeight(45)
@@ -198,6 +208,7 @@ class MainWindow(QMainWindow):
         grid.setVerticalSpacing(15)
         grid.setHorizontalSpacing(15)
 
+        # [恢复] 中文标签
         grid.addWidget(QLabel("基础延迟 (ms)"), 0, 0)
         self.base_input = QLineEdit()
         self.base_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -241,6 +252,7 @@ class MainWindow(QMainWindow):
 
         if vk > 0:
             if not WinSystem.register_hotkey(int(self.winId()), hk_id, vk):
+                # [恢复] 中文弹窗
                 QMessageBox.warning(self, "热键冲突", f"按键 '{text}' 已被占用")
 
                 sender_btn = self.hk_start_btn if hk_id == self.HK_START else self.hk_stop_btn
@@ -260,7 +272,8 @@ class MainWindow(QMainWindow):
 
         text = QApplication.clipboard().text()
         if not text:
-            self.result_label.setText("剪贴板为空")
+            # [保留] 英文提示（在进度条下方）
+            self.result_label.setText("Clipboard is empty")
             return
 
         text = text.replace('\r\n', '\n')
@@ -269,13 +282,14 @@ class MainWindow(QMainWindow):
             base = int(self.base_input.text())
             float_val = int(self.float_input.text())
         except ValueError:
-            self.result_label.setText("参数错误")
+            self.result_label.setText("Invalid parameters")
             return
 
         self.start_btn.setEnabled(False)
         self.start_btn.setText(f"运行中 ({self.hk_start_btn.text()})")
         self.stop_btn.setEnabled(True)
-        self.result_label.setText("任务进行中...")
+        # [保留] 英文提示 (Injecting... 风格)
+        self.result_label.setText("Injecting...")  # 使用了你截图里的词
 
         self.worker = PasteWorker(text, base, float_val)
         self.worker.progress_signal.connect(self.progress_bar.setValue)
@@ -294,11 +308,12 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.progress_bar.setValue(0)
 
-        if self.status_label.text() != "已中断":
+        # [保留] 英文提示
+        if self.status_label.text() != "Interrupted":
             self.status_label.setText("Success")
-            self.result_label.setText("完成")
+            self.result_label.setText("Done")
         else:
-            self.result_label.setText("用户已停止")
+            self.result_label.setText("Stopped by user")
 
     def nativeEvent(self, event_type, message):
         if event_type == b"windows_generic_MSG" or event_type == "windows_generic_MSG":
