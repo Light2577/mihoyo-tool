@@ -1,0 +1,21 @@
+# 忽略编译生成的文件夹
+build/
+dist/
+*.dist/
+*.build/
+*.onefile-build/
+
+# 忽略 Python 缓存
+__pycache__/
+*.pyc
+
+# 忽略 IDE 配置文件 (如果你用 PyCharm 或 VSCode)
+.idea/
+.vscode/
+
+# 忽略虚拟环境 (如果有)
+venv/
+.env
+
+# 忽略打包生成的 EXE (代码库只放代码，EXE 去 Release 发布)
+*.exe
