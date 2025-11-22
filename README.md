@@ -29,7 +29,6 @@
   <img src="assets/demo.svg" width="100%" alt="miHoYo Tool UI Demo">
 </div>
 
-*(这里建议放一张你软件实际运行的 GIF 动图，展示自动打字的过程)*
 
 ---
 
