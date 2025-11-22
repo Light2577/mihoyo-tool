@@ -4,43 +4,31 @@ from PySide6.QtCore import Qt, QPoint, QSettings, Signal
 from PySide6.QtGui import QKeySequence, QIcon
 import sys
 import os
-# [关键修复] 导入 wintypes 防止崩溃
 from ctypes import wintypes
 
-# 导入核心逻辑
 from core_engine import WinSystem, PasteWorker
 
-# ==========================================
-# 样式表配置
-# ==========================================
+# CSS 样式
 STYLESHEET = """
     QWidget#MainWidget { background-color: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 15px; }
     QLabel { font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; color: #555; font-size: 13px; }
     QLabel#TitleLabel { font-size: 16px; font-weight: bold; color: #333; }
-
-    /* 窗口控制按钮 */
     QPushButton#WinCtrlBtn { background: transparent; color: #999; border: none; font-size: 14px; border-radius: 15px; font-weight: bold; }
     QPushButton#WinCtrlBtn:hover { background-color: #F0F0F0; color: #333; }
     QPushButton#CloseBtn { background: transparent; color: #999; border: none; font-size: 18px; border-radius: 15px; }
     QPushButton#CloseBtn:hover { background-color: #FF6B6B; color: white; }
-
     QLabel#StatusLabel { font-size: 24px; font-weight: bold; color: #333; }
     QLabel#ResultLabel { color: #AAA; font-size: 12px; }
-
     QLineEdit { border: 1px solid #EEE; border-radius: 8px; padding: 6px 10px; background: #F9F9F9; color: #555; selection-background-color: #87CEEB; }
     QLineEdit:focus { border: 1px solid #87CEEB; background: #FFF; }
-
     QPushButton#HotkeyBtn { border: 1px solid #EEE; border-radius: 8px; background: #F9F9F9; color: #333; padding: 6px; }
     QPushButton#HotkeyBtn:hover { border-color: #87CEEB; background: #F0F8FF; }
-
     QProgressBar { background: #F0F0F0; border: none; border-radius: 3px; height: 6px; }
     QProgressBar::chunk { background: #87CEEB; border-radius: 3px; }
-
     QPushButton#StartBtn { background: #87CEEB; color: white; border: none; border-radius: 22px; font-weight: bold; font-size: 14px; }
     QPushButton#StartBtn:hover { background: #76BEDB; }
     QPushButton#StartBtn:pressed { background: #5CA8C9; }
     QPushButton#StartBtn:disabled { background: #E0E0E0; color: #AAA; }
-
     QPushButton#StopBtn { background: white; color: #FF6B6B; border: 1px solid #FF6B6B; border-radius: 22px; font-weight: bold; font-size: 14px; }
     QPushButton#StopBtn:hover { background: #FFF0F0; }
     QPushButton#StopBtn:pressed { background: #FFE0E0; }
@@ -49,7 +37,6 @@ STYLESHEET = """
 
 
 class HotkeyButton(QPushButton):
-    """自定义热键录制按钮（修复版）"""
     hotkeyChanged = Signal(int, str)
 
     def __init__(self):
@@ -75,22 +62,21 @@ class HotkeyButton(QPushButton):
         key = e.key()
         native_vk = e.nativeVirtualKey()
 
-        # 1. 处理取消操作 (Esc)
         if key == Qt.Key.Key_Escape:
             self._finish_record(0, "无")
             return
 
-        # 2. 忽略单纯的修饰键
+        # 过滤纯修饰键
         if key in [Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta]:
             return
 
-        # 3. [关键修复] 强制修正 F1-F12 的虚拟键码
+        # Qt 在某些环境下获取 F1-F12 的 nativeVirtualKey 会返回 0
+        # 这里手动映射到 Windows VK 码 (F1=0x70)
         if native_vk == 0:
             if Qt.Key.Key_F1 <= key <= Qt.Key.Key_F24:
-                # Windows VK_F1 是 0x70 (112)
                 native_vk = 0x70 + (key - Qt.Key.Key_F1)
             else:
-                self.setText("无效键，请重试")
+                self.setText("无效键")
                 return
 
         key_seq = QKeySequence(key)
@@ -106,24 +92,23 @@ class HotkeyButton(QPushButton):
 
 
 class MainWindow(QMainWindow):
-    # 热键 ID 常量
     HK_START = 101
     HK_STOP = 102
 
     def __init__(self):
         super().__init__()
-        self._init_window_properties()
+        self._init_window()
         self._setup_ui()
         self._load_config()
 
-        # 状态变量
         self.worker = None
         self.is_dragging = False
         self.drag_position = QPoint()
 
-    def _init_window_properties(self):
+    def _init_window(self):
         self.setWindowTitle("miHoYo Tool Pro")
         self.resize(400, 550)
+        # 无边框 + 系统动画支持
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowSystemMenuHint | Qt.WindowType.WindowMinimizeButtonHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -141,10 +126,8 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(25, 20, 25, 30)
         layout.setSpacing(15)
 
-        # 1. 自定义标题栏
         self._create_title_bar(layout)
 
-        # 2. 状态显示区
         self.status_label = QLabel("Waiting...")
         self.status_label.setObjectName("StatusLabel")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -161,11 +144,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.result_label)
         layout.addSpacing(20)
 
-        # 3. 参数设置区
         self._create_settings_area(layout)
         layout.addStretch()
 
-        # 4. 底部控制按钮
         self.start_btn = QPushButton("开始运行")
         self.start_btn.setObjectName("StartBtn")
         self.start_btn.setFixedHeight(45)
@@ -258,25 +239,19 @@ class MainWindow(QMainWindow):
         btn.current_vk = vk
         WinSystem.register_hotkey(int(self.winId()), hk_id, vk)
 
-    # [核心逻辑] 这里就是刚才你缺失的 _update_hotkey 方法
     def _update_hotkey(self, vk, text, hk_id):
-        # 1. 先注销旧热键
         WinSystem.unregister_hotkey(int(self.winId()), hk_id)
 
-        # 2. 如果是有效按键，尝试注册
         if vk > 0:
-            success = WinSystem.register_hotkey(int(self.winId()), hk_id, vk)
-            if not success:
-                # 弹窗提示冲突
-                QMessageBox.warning(self, "热键冲突", f"按键 '{text}' 已被其他程序占用，请更换其他按键。")
+            if not WinSystem.register_hotkey(int(self.winId()), hk_id, vk):
+                QMessageBox.warning(self, "热键冲突", f"按键 '{text}' 已被占用")
 
-                # 回滚 UI
+                # 回滚
                 sender_btn = self.hk_start_btn if hk_id == self.HK_START else self.hk_stop_btn
                 sender_btn.setText("无")
                 sender_btn.current_vk = 0
                 return
 
-        # 3. 保存配置
         prefix = "start" if hk_id == self.HK_START else "stop"
         self.settings.setValue(f"{prefix}_vk", vk)
         self.settings.setValue(f"{prefix}_txt", text)
@@ -284,7 +259,6 @@ class MainWindow(QMainWindow):
         if hk_id == self.HK_START and not self.start_btn.isEnabled():
             self.start_btn.setText(f"运行中 ({text})")
 
-    # --- 业务逻辑 ---
     def start_task(self):
         if self.worker and self.worker.isRunning(): return
 
@@ -299,7 +273,7 @@ class MainWindow(QMainWindow):
             base = int(self.base_input.text())
             float_val = int(self.float_input.text())
         except ValueError:
-            self.result_label.setText("请输入有效的数字延迟")
+            self.result_label.setText("参数错误")
             return
 
         self.start_btn.setEnabled(False)
@@ -323,13 +297,13 @@ class MainWindow(QMainWindow):
         self.start_btn.setText("开始运行")
         self.stop_btn.setEnabled(False)
         self.progress_bar.setValue(0)
+
         if self.status_label.text() != "已中断":
             self.status_label.setText("Success")
             self.result_label.setText("完成")
         else:
             self.result_label.setText("用户已停止")
 
-    # --- 事件处理 ---
     def nativeEvent(self, event_type, message):
         if event_type == b"windows_generic_MSG" or event_type == "windows_generic_MSG":
             msg = wintypes.MSG.from_address(int(message))
