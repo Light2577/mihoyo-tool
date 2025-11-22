@@ -1,6 +1,3 @@
-<div align="center">
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&pause=1000&color=F7F7F7&background=00000000&center=true&vCenter=true&width=435&lines=miHoYo+Tool;专治各种“禁止粘贴”;模拟人工手打;安全、开源、高效" alt="Typing SVG" />
-</div>
 
 <div align="center">
 
@@ -29,7 +26,6 @@
   <img src="assets/demo.svg" width="100%" alt="miHoYo Tool UI Demo">
 </div>
 
-*(这里建议放一张你软件实际运行的 GIF 动图，展示自动打字的过程)*
 
 ---
 
