@@ -1,6 +1,3 @@
-<div align="center">
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&pause=1000&color=F7F7F7&background=00000000&center=true&vCenter=true&width=435&lines=miHoYo+Tool;专治各种“禁止粘贴”;模拟人工手打;安全、开源、高效" alt="Typing SVG" />
-</div>
 
 <div align="center">
 
