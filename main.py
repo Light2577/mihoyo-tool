@@ -9,7 +9,8 @@ except ImportError:
 
 from PySide6.QtWidgets import QApplication
 from core_engine import WinSystem
-from 主窗口 import MainWindow
+# [变更] 引用新的英文文件名
+from main_window import MainWindow
 
 
 def main():

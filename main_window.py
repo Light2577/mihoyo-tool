@@ -8,7 +8,7 @@ from ctypes import wintypes
 
 from core_engine import WinSystem, PasteWorker
 
-# CSS 样式
+# 样式表
 STYLESHEET = """
     QWidget#MainWidget { background-color: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 15px; }
     QLabel { font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; color: #555; font-size: 13px; }
@@ -66,12 +66,10 @@ class HotkeyButton(QPushButton):
             self._finish_record(0, "无")
             return
 
-        # 过滤纯修饰键
         if key in [Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta]:
             return
 
-        # Qt 在某些环境下获取 F1-F12 的 nativeVirtualKey 会返回 0
-        # 这里手动映射到 Windows VK 码 (F1=0x70)
+        # 手动修正 F1-F12 键码
         if native_vk == 0:
             if Qt.Key.Key_F1 <= key <= Qt.Key.Key_F24:
                 native_vk = 0x70 + (key - Qt.Key.Key_F1)
@@ -108,7 +106,6 @@ class MainWindow(QMainWindow):
     def _init_window(self):
         self.setWindowTitle("miHoYo Tool Pro")
         self.resize(400, 550)
-        # 无边框 + 系统动画支持
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowSystemMenuHint | Qt.WindowType.WindowMinimizeButtonHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -246,7 +243,6 @@ class MainWindow(QMainWindow):
             if not WinSystem.register_hotkey(int(self.winId()), hk_id, vk):
                 QMessageBox.warning(self, "热键冲突", f"按键 '{text}' 已被占用")
 
-                # 回滚
                 sender_btn = self.hk_start_btn if hk_id == self.HK_START else self.hk_stop_btn
                 sender_btn.setText("无")
                 sender_btn.current_vk = 0

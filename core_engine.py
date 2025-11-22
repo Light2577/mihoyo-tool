@@ -1,7 +1,7 @@
 import time
 import random
 import ctypes
-from ctypes import wintypes, Structure, Union, c_ulong, c_uint64, sizeof, POINTER, c_int, c_uint
+from ctypes import wintypes, Structure, Union, c_ulong, c_uint64, sizeof, POINTER, c_int, c_uint, c_long
 from PySide6.QtCore import QThread, Signal
 
 # 指针长度适配
@@ -14,8 +14,18 @@ class KEYBDINPUT(Structure):
                 ("dwExtraInfo", ULONG_PTR)]
 
 
+class MOUSEINPUT(Structure):
+    _fields_ = [("dx", c_long), ("dy", c_long),
+                ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD), ("dwExtraInfo", ULONG_PTR)]
+
+
+class HARDWAREINPUT(Structure):
+    _fields_ = [("uMsg", wintypes.DWORD), ("wParamL", wintypes.WORD), ("wParamH", wintypes.WORD)]
+
+
 class INPUT_UNION(Union):
-    _fields_ = [("ki", KEYBDINPUT)]
+    _fields_ = [("ki", KEYBDINPUT), ("mi", MOUSEINPUT), ("hi", HARDWAREINPUT)]
 
 
 class INPUT(Structure):
@@ -24,7 +34,6 @@ class INPUT(Structure):
 
 
 class WinSystem:
-    # WinAPI 常量
     INPUT_KEYBOARD = 1
     KEYEVENTF_KEYUP = 0x0002
     KEYEVENTF_UNICODE = 0x0004
@@ -34,6 +43,9 @@ class WinSystem:
 
     _user32 = ctypes.windll.user32
     _shell32 = ctypes.windll.shell32
+
+    _user32.SendInput.argtypes = [c_uint, POINTER(INPUT), c_int]
+    _user32.SendInput.restype = c_uint
 
     @staticmethod
     def is_user_an_admin() -> bool:
@@ -53,12 +65,10 @@ class WinSystem:
     def send_input_batch(inputs: list):
         n_inputs = len(inputs)
         input_array = (INPUT * n_inputs)(*inputs)
-        WinSystem._user32.SendInput.argtypes = [c_uint, POINTER(INPUT), c_int]
         WinSystem._user32.SendInput(n_inputs, input_array, sizeof(INPUT))
 
     @staticmethod
     def minimize_window_anim(hwnd: int):
-        # 发送系统命令以保留最小化动画
         WinSystem._user32.PostMessageW(wintypes.HWND(hwnd), WinSystem.WM_SYSCOMMAND, WinSystem.SC_MINIMIZE, 0)
 
     @staticmethod
@@ -78,6 +88,8 @@ class InputSimulator:
         inp.ki.wVk = vk
         inp.ki.wScan = scan
         inp.ki.dwFlags = flags
+        inp.ki.time = 0
+        inp.ki.dwExtraInfo = 0
         return inp
 
     @staticmethod
@@ -86,19 +98,19 @@ class InputSimulator:
             InputSimulator.send_vk(WinSystem.VK_RETURN)
             return
 
-        # Unicode 模式模拟按键
         scan_code = ord(char)
         down = InputSimulator._make_input(scan=scan_code, flags=WinSystem.KEYEVENTF_UNICODE)
         up = InputSimulator._make_input(scan=scan_code, flags=WinSystem.KEYEVENTF_UNICODE | WinSystem.KEYEVENTF_KEYUP)
+
         WinSystem.send_input_batch([down, up])
-        time.sleep(0.0005)  # 极短延迟防止丢键
+        time.sleep(0.001)
 
     @staticmethod
     def send_vk(vk_code: int):
         down = InputSimulator._make_input(vk=vk_code)
         up = InputSimulator._make_input(vk=vk_code, flags=WinSystem.KEYEVENTF_KEYUP)
         WinSystem.send_input_batch([down, up])
-        time.sleep(0.0005)
+        time.sleep(0.001)
 
 
 class PasteWorker(QThread):
@@ -115,18 +127,6 @@ class PasteWorker(QThread):
 
     def stop(self):
         self.is_running = False
-
-    def _smart_sleep(self, delay_ms: float):
-        # 混合延迟策略：
-        # >15ms 使用系统 sleep 释放 CPU
-        # <15ms 使用空转循环以保证高精度
-        seconds = delay_ms / 1000.0
-        if seconds > 0.015:
-            time.sleep(seconds - 0.01)
-
-        target = time.perf_counter() + seconds
-        while time.perf_counter() < target:
-            pass
 
     def run(self):
         for i in range(3, 0, -1):
@@ -148,13 +148,15 @@ class PasteWorker(QThread):
 
             InputSimulator.send_char(char)
 
-            current_delay = self.base_delay
+            current_delay_ms = self.base_delay
             if self.random_delay > 0:
-                current_delay += random.randrange(0, self.random_delay)
+                current_delay_ms += random.randrange(0, self.random_delay)
 
-            self._smart_sleep(current_delay)
+            # 使用忙等待以保证时间精度
+            target_time = time.perf_counter() + (current_delay_ms / 1000.0)
+            while time.perf_counter() < target_time:
+                pass
 
-            # 降低 UI 刷新频率，避免卡顿
             if i % 5 == 0 or i == total - 1:
                 progress = int(((i + 1) / total) * 100)
                 self.progress_signal.emit(progress)
