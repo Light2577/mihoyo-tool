@@ -1,11 +1,13 @@
 import time
 import random
+import logging
 import ctypes
 from ctypes import wintypes, Structure, Union, c_ulong, c_uint64, sizeof, POINTER, c_int, c_uint, c_long
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Signal, QElapsedTimer
 
 # 指针长度适配
 ULONG_PTR = c_uint64 if sizeof(ctypes.c_void_p) == 8 else c_ulong
+logger = logging.getLogger(__name__)
 
 
 class KEYBDINPUT(Structure):
@@ -46,6 +48,8 @@ class WinSystem:
 
     _user32.SendInput.argtypes = [c_uint, POINTER(INPUT), c_int]
     _user32.SendInput.restype = c_uint
+    _user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, c_int, c_int, c_int, c_int, c_uint]
+    _user32.SetWindowPos.restype = wintypes.BOOL
 
     @staticmethod
     def is_user_an_admin() -> bool:
@@ -62,10 +66,20 @@ class WinSystem:
             pass
 
     @staticmethod
+    def set_topmost(hwnd: int, enable: bool):
+        """Use Win32 API to toggle topmost without causing Qt window recreate."""
+        SWP_NOSIZE = 0x0001
+        SWP_NOMOVE = 0x0002
+        SWP_NOACTIVATE = 0x0010
+        flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE
+        insert_after = wintypes.HWND(-1 if enable else -2)  # HWND_TOPMOST / HWND_NOTOPMOST
+        WinSystem._user32.SetWindowPos(wintypes.HWND(hwnd), insert_after, 0, 0, 0, 0, flags)
+
+    @staticmethod
     def send_input_batch(inputs: list):
         n_inputs = len(inputs)
         input_array = (INPUT * n_inputs)(*inputs)
-        WinSystem._user32.SendInput(n_inputs, input_array, sizeof(INPUT))
+        return WinSystem._user32.SendInput(n_inputs, input_array, sizeof(INPUT))
 
     @staticmethod
     def minimize_window_anim(hwnd: int):
@@ -95,22 +109,29 @@ class InputSimulator:
     @staticmethod
     def send_char(char: str):
         if char == '\n':
-            InputSimulator.send_vk(WinSystem.VK_RETURN)
-            return
+            return InputSimulator.send_vk(WinSystem.VK_RETURN)
 
         scan_code = ord(char)
         down = InputSimulator._make_input(scan=scan_code, flags=WinSystem.KEYEVENTF_UNICODE)
         up = InputSimulator._make_input(scan=scan_code, flags=WinSystem.KEYEVENTF_UNICODE | WinSystem.KEYEVENTF_KEYUP)
 
-        WinSystem.send_input_batch([down, up])
+        sent = WinSystem.send_input_batch([down, up])
+        if sent == 0:
+            logger.warning("SendInput failed for char=%s", repr(char))
+            return False
         time.sleep(0.001)
+        return True
 
     @staticmethod
     def send_vk(vk_code: int):
         down = InputSimulator._make_input(vk=vk_code)
         up = InputSimulator._make_input(vk=vk_code, flags=WinSystem.KEYEVENTF_KEYUP)
-        WinSystem.send_input_batch([down, up])
+        sent = WinSystem.send_input_batch([down, up])
+        if sent == 0:
+            logger.warning("SendInput failed for vk=%s", hex(vk_code))
+            return False
         time.sleep(0.001)
+        return True
 
 
 class PasteWorker(QThread):
@@ -126,45 +147,75 @@ class PasteWorker(QThread):
         self.is_running = True
 
     def stop(self):
+        logger.info("PasteWorker stop requested")
         self.is_running = False
 
     def run(self):
-        # [修改] 英文倒计时
-        for i in range(3, 0, -1):
-            if not self.is_running: return
-            self.status_signal.emit(f"Preparing... {i}")
-            time.sleep(1)
+        logger.info("PasteWorker started: %d chars, base=%dms random=%dms", len(self.content), self.base_delay, self.random_delay)
+        stopped = False
+        try:
+            for i in range(3, 0, -1):
+                if not self.is_running:
+                    stopped = True
+                    break
+                self.status_signal.emit(f"status:preparing:{i}")
+                self._sleep_cancelable(1000)
 
-        self.status_signal.emit("Typing...")
-        total = len(self.content)
+            if stopped:
+                self.status_signal.emit("status:stopped")
+                return
 
-        if total == 0:
+            self.status_signal.emit("status:typing")
+            total = len(self.content)
+
+            if total == 0:
+                self.status_signal.emit("status:stopped")
+                return
+
+            for i, char in enumerate(self.content):
+                if not self.is_running:
+                    self.status_signal.emit("status:stopped")
+                    stopped = True
+                    break
+
+                if not InputSimulator.send_char(char):
+                    self.status_signal.emit("status:stopped")
+                    stopped = True
+                    logger.error("SendInput returned 0; stop typing")
+                    break
+
+                current_delay_ms = self.base_delay
+                if self.random_delay > 0:
+                    current_delay_ms += random.randrange(0, self.random_delay)
+
+                if current_delay_ms > 0:
+                    self._sleep_cancelable(current_delay_ms)
+
+                # [关键修改] 移除 % 5 限制，每输入一个字符都更新进度，实现极致丝滑
+                progress = int(((i + 1) / total) * 100)
+                self.progress_signal.emit(progress)
+
+            if not stopped and self.is_running:
+                self.status_signal.emit("status:finished")
+                self.progress_signal.emit(100)
+                logger.info("PasteWorker finished normally")
+            else:
+                logger.info("PasteWorker interrupted by user")
+        finally:
             self.finished_signal.emit()
+            logger.info("PasteWorker exit (stopped=%s)", stopped)
+
+    def _sleep_cancelable(self, total_ms: int):
+        """可中断睡眠，避免忙等，占用低且响应 stop。"""
+        if total_ms <= 0:
             return
-
-        for i, char in enumerate(self.content):
-            if not self.is_running:
-                # [修改] 英文状态
-                self.status_signal.emit("Interrupted")
+        timer = QElapsedTimer()
+        timer.start()
+        # 最小粒度 5ms，保证停止时 UI 反馈更快
+        while self.is_running:
+            elapsed = timer.elapsed()
+            if elapsed >= total_ms:
                 break
-
-            InputSimulator.send_char(char)
-
-            current_delay_ms = self.base_delay
-            if self.random_delay > 0:
-                current_delay_ms += random.randrange(0, self.random_delay)
-
-            target_time = time.perf_counter() + (current_delay_ms / 1000.0)
-            while time.perf_counter() < target_time:
-                pass
-
-            # [关键修改] 移除 % 5 限制，每输入一个字符都更新进度，实现极致丝滑
-            progress = int(((i + 1) / total) * 100)
-            self.progress_signal.emit(progress)
-
-        if self.is_running:
-            # [修改] 英文状态
-            self.status_signal.emit("Finished")
-            self.progress_signal.emit(100)
-
-        self.finished_signal.emit()
+            remaining = total_ms - elapsed
+            chunk = min(10, max(5, remaining))
+            QThread.msleep(int(chunk))
