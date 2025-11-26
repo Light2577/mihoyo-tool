@@ -6,7 +6,9 @@
 
 这玩意儿就是模拟键盘，把你剪贴板里的东西一个字一个字“敲”进去。
 
-![miHoYo Tool UI Demo](assets/demo.svg)
+<div align="center">
+  <img src="assets/demo.svg" width="100%" alt="miHoYo Tool UI Demo">
+</div>
 
 ### 能干啥？
 
