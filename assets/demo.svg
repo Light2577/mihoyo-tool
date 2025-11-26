@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" width="720" height="320">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 20 700 270" width="700" height="270">
   <defs>
     <!-- 窗口阴影 -->
     <filter id="shadow-lg" x="-50%" y="-50%" width="200%" height="200%">
@@ -96,9 +96,6 @@
       ]]>
     </style>
   </defs>
-
-  <!-- ================= 背景 (可选，为了在白色背景外也能看清边界) ================= -->
-  <rect width="720" height="320" fill="#f0f2f5" />
 
   <!-- ================= 左侧界面 ================= -->
   <g transform="translate(20, 40)" filter="url(#shadow-lg)">
