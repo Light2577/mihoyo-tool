@@ -42,6 +42,8 @@ function Build-App {
         --standalone `
         --onefile `
         --enable-plugin=pyside6 `
+        --include-data-dir=svg=svg `
+        --include-data-dir=assets=assets `
         --windows-console-mode=disable `
         --windows-uac-admin `
         --windows-icon-from-ico=icon.ico `

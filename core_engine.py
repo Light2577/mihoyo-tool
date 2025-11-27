@@ -2,6 +2,7 @@ import time
 import random
 import logging
 import ctypes
+import unicodedata
 from ctypes import wintypes, Structure, Union, c_ulong, c_uint64, sizeof, POINTER, c_int, c_uint, c_long
 from PySide6.QtCore import QThread, Signal, QElapsedTimer
 
@@ -40,6 +41,10 @@ class WinSystem:
     KEYEVENTF_KEYUP = 0x0002
     KEYEVENTF_UNICODE = 0x0004
     VK_RETURN = 0x0D
+    MOD_ALT = 0x0001
+    MOD_CONTROL = 0x0002
+    MOD_SHIFT = 0x0004
+    MOD_WIN = 0x0008
     WM_SYSCOMMAND = 0x0112
     SC_MINIMIZE = 0xF020
 
@@ -86,8 +91,9 @@ class WinSystem:
         WinSystem._user32.PostMessageW(wintypes.HWND(hwnd), WinSystem.WM_SYSCOMMAND, WinSystem.SC_MINIMIZE, 0)
 
     @staticmethod
-    def register_hotkey(hwnd: int, hotkey_id: int, vk: int) -> bool:
-        return WinSystem._user32.RegisterHotKey(wintypes.HWND(hwnd), hotkey_id, 0, vk)
+    def register_hotkey(hwnd: int, hotkey_id: int, vk: int, modifiers: int = 0) -> bool:
+        """Register global hotkey with optional modifier flags."""
+        return WinSystem._user32.RegisterHotKey(wintypes.HWND(hwnd), hotkey_id, modifiers, vk)
 
     @staticmethod
     def unregister_hotkey(hwnd: int, hotkey_id: int) -> bool:
@@ -95,6 +101,58 @@ class WinSystem:
 
 
 class InputSimulator:
+    @staticmethod
+    def _utf16_units(text: str) -> list[int]:
+        """Return UTF-16 code units for given text (handles surrogate pairs)."""
+        units: list[int] = []
+        for ch in text:
+            codepoint = ord(ch)
+            if codepoint <= 0xFFFF:
+                units.append(codepoint)
+            else:
+                cp = codepoint - 0x10000
+                units.extend([0xD800 + (cp >> 10), 0xDC00 + (cp & 0x3FF)])
+        return units
+
+    @staticmethod
+    def _is_regional_indicator(cp: int) -> bool:
+        return 0x1F1E6 <= cp <= 0x1F1FF
+
+    @staticmethod
+    def iter_graphemes(text: str):
+        """Very small grapheme splitter to keep ZWJ/VS/RI sequences together."""
+        chars = list(text or "")
+        i = 0
+        while i < len(chars):
+            cluster = [chars[i]]
+            i += 1
+            while i < len(chars):
+                c = chars[i]
+                cp = ord(c)
+                prev_cp = ord(cluster[-1])
+                if c == "\u200d":  # ZWJ stays in cluster
+                    cluster.append(c)
+                    i += 1
+                    continue
+                if prev_cp == 0x200D:  # char after ZWJ joins cluster
+                    cluster.append(c)
+                    i += 1
+                    continue
+                if cp in (0xFE0E, 0xFE0F) or unicodedata.combining(c):
+                    cluster.append(c)
+                    i += 1
+                    continue
+                if InputSimulator._is_regional_indicator(prev_cp) and InputSimulator._is_regional_indicator(cp):
+                    cluster.append(c)
+                    i += 1
+                    continue
+                break
+            yield "".join(cluster)
+
+    @staticmethod
+    def count_graphemes(text: str) -> int:
+        return sum(1 for _ in InputSimulator.iter_graphemes(text))
+
     @staticmethod
     def _make_input(vk=0, scan=0, flags=0) -> INPUT:
         inp = INPUT()
@@ -108,14 +166,18 @@ class InputSimulator:
 
     @staticmethod
     def send_char(char: str):
+        """Send a character or multi-codepoint grapheme (emoji/ZWJ supported)."""
         if char == '\n':
             return InputSimulator.send_vk(WinSystem.VK_RETURN)
 
-        scan_code = ord(char)
-        down = InputSimulator._make_input(scan=scan_code, flags=WinSystem.KEYEVENTF_UNICODE)
-        up = InputSimulator._make_input(scan=scan_code, flags=WinSystem.KEYEVENTF_UNICODE | WinSystem.KEYEVENTF_KEYUP)
+        units = InputSimulator._utf16_units(char)
+        inputs = []
+        for unit in units:
+            inputs.append(InputSimulator._make_input(scan=unit, flags=WinSystem.KEYEVENTF_UNICODE))
+        for unit in units:
+            inputs.append(InputSimulator._make_input(scan=unit, flags=WinSystem.KEYEVENTF_UNICODE | WinSystem.KEYEVENTF_KEYUP))
 
-        sent = WinSystem.send_input_batch([down, up])
+        sent = WinSystem.send_input_batch(inputs)
         if sent == 0:
             logger.warning("SendInput failed for char=%s", repr(char))
             return False
@@ -139,22 +201,40 @@ class PasteWorker(QThread):
     status_signal = Signal(str)
     finished_signal = Signal()
 
-    def __init__(self, content: str, base_delay: int, random_delay: int):
+    def __init__(self, content: str, base_delay: int, random_delay: int, start_offset: int = 0,
+                 countdown_seconds: int = 3):
         super().__init__()
-        self.content = content
+        self.content = content or ""
+        self.graphemes = list(InputSimulator.iter_graphemes(self.content))
         self.base_delay = base_delay
         self.random_delay = random_delay
+        self.total_graphemes = len(self.graphemes)
+        self.start_offset = max(0, min(start_offset, self.total_graphemes))
+        self.countdown_seconds = max(0, countdown_seconds)
         self.is_running = True
+        self.completed = False
+        self.next_offset = self.start_offset
 
     def stop(self):
         logger.info("PasteWorker stop requested")
         self.is_running = False
 
     def run(self):
-        logger.info("PasteWorker started: %d chars, base=%dms random=%dms", len(self.content), self.base_delay, self.random_delay)
+        total = self.total_graphemes
+        self.next_offset = self.start_offset
+        logger.info(
+            "PasteWorker started: %d chars, base=%dms random=%dms offset=%d wait=%ds",
+            len(self.content),
+            self.base_delay,
+            self.random_delay,
+            self.start_offset,
+            self.countdown_seconds,
+        )
+
         stopped = False
         try:
-            for i in range(3, 0, -1):
+            # 倒计时
+            for i in range(self.countdown_seconds, 0, -1):
                 if not self.is_running:
                     stopped = True
                     break
@@ -165,19 +245,18 @@ class PasteWorker(QThread):
                 self.status_signal.emit("status:stopped")
                 return
 
-            self.status_signal.emit("status:typing")
-            total = len(self.content)
-
-            if total == 0:
+            if total == 0 or self.start_offset >= total:
                 self.status_signal.emit("status:stopped")
+                self.progress_signal.emit(0)
                 return
 
-            for i, char in enumerate(self.content):
+            self.status_signal.emit("status:typing")
+            for idx in range(self.start_offset, total):
                 if not self.is_running:
-                    self.status_signal.emit("status:stopped")
                     stopped = True
                     break
 
+                char = self.graphemes[idx]
                 if not InputSimulator.send_char(char):
                     self.status_signal.emit("status:stopped")
                     stopped = True
@@ -187,23 +266,26 @@ class PasteWorker(QThread):
                 current_delay_ms = self.base_delay
                 if self.random_delay > 0:
                     current_delay_ms += random.randrange(0, self.random_delay)
-
                 if current_delay_ms > 0:
                     self._sleep_cancelable(current_delay_ms)
 
-                # [关键修改] 移除 % 5 限制，每输入一个字符都更新进度，实现极致丝滑
-                progress = int(((i + 1) / total) * 100)
+                self.next_offset = idx + 1
+                progress = int(((idx + 1) / total) * 100)
                 self.progress_signal.emit(progress)
 
             if not stopped and self.is_running:
+                self.completed = True
+                self.next_offset = total
                 self.status_signal.emit("status:finished")
                 self.progress_signal.emit(100)
                 logger.info("PasteWorker finished normally")
             else:
-                logger.info("PasteWorker interrupted by user")
+                self.completed = False
+                logger.info("PasteWorker interrupted by user at offset=%d", self.next_offset)
+                self.status_signal.emit("status:stopped")
         finally:
             self.finished_signal.emit()
-            logger.info("PasteWorker exit (stopped=%s)", stopped)
+            logger.info("PasteWorker exit (stopped=%s, completed=%s, next_offset=%d)", stopped, self.completed, self.next_offset)
 
     def _sleep_cancelable(self, total_ms: int):
         """可中断睡眠，避免忙等，占用低且响应 stop。"""

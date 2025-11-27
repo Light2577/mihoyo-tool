@@ -1,4 +1,5 @@
 import sys
+import subprocess
 import ctypes
 import logging
 import argparse
@@ -37,7 +38,9 @@ def main():
 
     if not WinSystem.is_user_an_admin():
         logger.warning("Elevating to administrator for hotkey and input APIs")
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+        # list2cmdline 保留包含空格的路径/参数
+        params = subprocess.list2cmdline(sys.argv)
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
         sys.exit()
 
     app = QApplication(sys.argv)

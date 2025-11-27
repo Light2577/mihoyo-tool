@@ -2,6 +2,7 @@
 import sys
 import os
 import logging
+from pathlib import Path
 from ctypes import wintypes
 
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -17,12 +18,11 @@ from config import (
     DEFAULT_RANDOM_DELAY_MS,
     DEFAULT_COUNTDOWN_SEC,
     DEFAULT_START_HOTKEY,
-    DEFAULT_STOP_HOTKEY,
     DEFAULT_CONTINUE_HOTKEY,
 )
 from styles import THEMES
 from ui_texts import LANGS, get_text
-from core_engine import WinSystem, PasteWorker
+from core_engine import WinSystem, PasteWorker, InputSimulator
 from components import ToggleSwitch  # <--- 必须导入这个新组件
 
 logger = logging.getLogger(__name__)
@@ -490,6 +490,7 @@ class MainWindow(QMainWindow):
         self.always_on_top = False
         self.base_override = base_override
         self.random_override = random_override
+        self.pending_total = 0
         self.countdown_seconds = DEFAULT_COUNTDOWN_SEC
         self.pending_text = ""
         self.pending_offset = 0
@@ -743,10 +744,31 @@ class MainWindow(QMainWindow):
         return QIcon(pm)
 
     def _load_svg_icon(self, filename: str, fallback: QIcon | None = None) -> QIcon:
-        path = os.path.join("svg", filename)
-        if os.path.exists(path):
-            return QIcon(path)
+        path = self._resolve_asset_path("svg", filename)
+        if path and path.exists():
+            return QIcon(str(path))
         return fallback or QIcon()
+
+    def _resolve_asset_path(self, *parts: str) -> Path | None:
+        """Find asset path that works both in source and Nuitka onefile."""
+        # Nuitka onefile payload extraction directory
+        onefile_temp = os.environ.get("NUITKA_ONEFILE_TEMP")
+        candidates = []
+        if onefile_temp:
+            candidates.append(Path(onefile_temp))
+        # Directory of this file (source run)
+        try:
+            candidates.append(Path(__file__).resolve().parent)
+        except Exception:
+            pass
+        # Directory of executable (frozen)
+        if getattr(sys, "frozen", False):
+            candidates.append(Path(sys.executable).resolve().parent)
+        for base in candidates:
+            candidate = base.joinpath(*parts)
+            if candidate.exists():
+                return candidate
+        return None
 
     def _refresh_icons(self):
         color = self._icon_color()
@@ -805,8 +827,10 @@ class MainWindow(QMainWindow):
             self.status_label.setText(self.s("empty_clipboard"))
             return
         total_len = len(text)
-        initial_progress = int((start_offset / total_len) * 100) if total_len else 0
+        total_graphemes = InputSimulator.count_graphemes(text)
+        initial_progress = int((start_offset / total_graphemes) * 100) if total_graphemes else 0
         self.pending_offset = start_offset
+        self.pending_total = total_graphemes
 
         self.start_btn.setEnabled(True)
         self.toggle_btn.setEnabled(True)
@@ -847,7 +871,7 @@ class MainWindow(QMainWindow):
     def continue_task(self):
         if self.worker and self.worker.isRunning():
             return
-        if not self.pending_text or self.pending_offset >= len(self.pending_text):
+        if not self.pending_text or self.pending_offset >= getattr(self, "pending_total", len(self.pending_text)):
             self.status_label.setText(self.s("no_pending"))
             return
         self._hold_finish = False
@@ -882,12 +906,15 @@ class MainWindow(QMainWindow):
                 if finished_worker.next_offset < len(finished_worker.content):
                     self.pending_text = finished_worker.content
                     self.pending_offset = finished_worker.next_offset
-                    progress = int((self.pending_offset / len(self.pending_text)) * 100)
+                    total = finished_worker.total_graphemes or len(self.pending_text)
+                    self.pending_total = total
+                    progress = int((self.pending_offset / total) * 100) if total else 0
                     self._set_progress_target(progress, instant=True)
                     self.status_label.setText(self.s("stopped_by_user"))
                 else:
                     self.pending_text = ""
                     self.pending_offset = 0
+                    self.pending_total = 0
                     self._set_progress_target(0, instant=True)
                     self.status_label.setText(self.s("stopped_by_user"))
                 self._hold_finish = False
@@ -1070,10 +1097,10 @@ class MainWindow(QMainWindow):
     def _start_spinner(self):
         if self._spinner_active:
             return
-            self._spinner_active = True
-            self._spinner_timer.timeout.connect(self._tick_spinner)
-            self._spinner_timer.start(120)
-            self.status_spinner.setVisible(True)
+        self._spinner_active = True
+        self._spinner_timer.timeout.connect(self._tick_spinner)
+        self._spinner_timer.start(120)
+        self.status_spinner.setVisible(True)
 
     def _stop_spinner(self):
         if not self._spinner_active:
