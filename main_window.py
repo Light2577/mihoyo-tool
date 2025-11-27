@@ -4,16 +4,21 @@ import os
 import logging
 from ctypes import wintypes
 
-from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
                                QLabel, QLineEdit, QProgressBar, QPushButton, QApplication, QMessageBox,
-                               QDialog, QDialogButtonBox, QFormLayout, QGraphicsDropShadowEffect, QFrame)
+                               QDialog, QDialogButtonBox, QFormLayout, QGraphicsDropShadowEffect, QFrame,
+                               QSizePolicy)
 from PySide6.QtCore import Qt, QPoint, QSettings, Signal, QTimer, QSize
 from PySide6.QtGui import QKeySequence, QIcon, QPixmap, QPainter, QColor, QPen, QPainterPath, QTransform
 
 # 引入你的本地模块
 from config import (
-    DEFAULT_BASE_DELAY_MS, DEFAULT_RANDOM_DELAY_MS,
-    DEFAULT_START_HOTKEY, DEFAULT_STOP_HOTKEY,
+    DEFAULT_BASE_DELAY_MS,
+    DEFAULT_RANDOM_DELAY_MS,
+    DEFAULT_COUNTDOWN_SEC,
+    DEFAULT_START_HOTKEY,
+    DEFAULT_STOP_HOTKEY,
+    DEFAULT_CONTINUE_HOTKEY,
 )
 from styles import THEMES
 from ui_texts import LANGS, get_text
@@ -25,11 +30,12 @@ logger = logging.getLogger(__name__)
 
 class HotkeyButton(QPushButton):
     """ 热键录制按钮，样式由 QSS 控制，这里主要处理逻辑 """
-    hotkeyChanged = Signal(int, str)
+    hotkeyChanged = Signal(int, int, str)
 
     def __init__(self):
         super().__init__()
         self.current_vk = 0
+        self.current_mods = 0
         self.setObjectName("HotkeyBtn")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.recording = False
@@ -61,9 +67,10 @@ class HotkeyButton(QPushButton):
 
         key = e.key()
         native_vk = e.nativeVirtualKey()
+        modifiers = e.modifiers()
 
         if key == Qt.Key.Key_Escape:
-            self._finish_record(0, self.none_text)
+            self._finish_record(0, 0, self.none_text)
             return
 
         if key in [Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta]:
@@ -77,16 +84,28 @@ class HotkeyButton(QPushButton):
                 self.setText(self.invalid_key_text)
                 return
 
-        key_seq = QKeySequence(key)
-        self._finish_record(native_vk, key_seq.toString())
+        win_mods = 0
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            win_mods |= WinSystem.MOD_CONTROL
+        if modifiers & Qt.KeyboardModifier.AltModifier:
+            win_mods |= WinSystem.MOD_ALT
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            win_mods |= WinSystem.MOD_SHIFT
+        if modifiers & Qt.KeyboardModifier.MetaModifier:
+            win_mods |= WinSystem.MOD_WIN
 
-    def _finish_record(self, vk, text):
+        seq_value = int(modifiers.value) | key
+        key_seq = QKeySequence(seq_value)
+        self._finish_record(native_vk, win_mods, key_seq.toString())
+
+    def _finish_record(self, vk, mods, text):
         self.recording = False
         self.releaseKeyboard()
         self.current_vk = vk
+        self.current_mods = mods
         self.setText(text)
         self.setStyleSheet("")  # 清除内联样式，恢复外部 QSS
-        self.hotkeyChanged.emit(vk, text)
+        self.hotkeyChanged.emit(vk, mods, text)
 
     def apply_texts(self, buttons: dict):
         self.none_text = buttons["none"]
@@ -102,8 +121,8 @@ class SettingsDialog(QDialog):
     特点：无边框 (Frameless)、阴影卡片、Toggle开关、填充式输入框
     """
 
-    def __init__(self, parent, lang: str, theme: str, base_delay: int, random_delay: int, start_hotkey: tuple,
-                 stop_hotkey: tuple):
+    def __init__(self, parent, lang: str, theme: str, base_delay: int, random_delay: int, countdown_seconds: int,
+                 start_hotkey: tuple, continue_hotkey: tuple):
         super().__init__(parent)
         self.parent_ref = parent
         self.lang = lang
@@ -114,7 +133,7 @@ class SettingsDialog(QDialog):
         # 1. 设置无边框和透明背景，为了显示阴影
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(340, 440)
+        self.resize(340, 500)
 
         # 主布局
         main_layout = QVBoxLayout(self)
@@ -160,22 +179,56 @@ class SettingsDialog(QDialog):
         self.random_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
         form_layout.addRow(self.random_label, self.random_input)
 
+        # 启动等待
+        self.wait_label = self._make_label(self.msgs["countdown_label"])
+        self.wait_input = QLineEdit(str(countdown_seconds))
+        self.wait_input.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        form_layout.addRow(self.wait_label, self.wait_input)
+
         # 热键设置
         self.start_btn = HotkeyButton()
         self.start_btn.current_vk = start_hotkey[1]
+        self.start_btn.current_mods = start_hotkey[2]
         self.start_btn.setText(start_hotkey[0])
         self.start_btn.apply_texts(self.buttons)
+        self.start_btn.hotkeyChanged.connect(lambda _vk, _mods, txt: self._on_hotkey_record(self.start_btn, txt))
         self.start_label = self._make_label(self.msgs["start_hotkey"])
         form_layout.addRow(self.start_label, self.start_btn)
 
-        self.stop_btn = HotkeyButton()
-        self.stop_btn.current_vk = stop_hotkey[1]
-        self.stop_btn.setText(stop_hotkey[0])
-        self.stop_btn.apply_texts(self.buttons)
-        self.stop_label = self._make_label(self.msgs["stop_hotkey"])
-        form_layout.addRow(self.stop_label, self.stop_btn)
+        self.continue_btn = HotkeyButton()
+        self.continue_btn.current_vk = continue_hotkey[1]
+        self.continue_btn.current_mods = continue_hotkey[2]
+        self.continue_btn.setText(continue_hotkey[0])
+        self.continue_btn.apply_texts(self.buttons)
+        self.continue_btn.hotkeyChanged.connect(lambda _vk, _mods, txt: self._on_hotkey_record(self.continue_btn, txt))
+        self.continue_label = self._make_label(self.msgs["continue_hotkey"])
+        form_layout.addRow(self.continue_label, self.continue_btn)
+
+        # 提示区域
+        self.hotkey_notice = QLabel(self.container)
+        self.hotkey_notice.setObjectName("HotkeyNotice")
+        self.hotkey_notice.setWordWrap(True)
+        self.hotkey_notice.setVisible(False)
+        self.hotkey_notice.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.hotkey_notice.setStyleSheet("""
+            QLabel#HotkeyNotice {
+                background: #ECFDF3;
+                color: #065F46;
+                border: 1px solid #A7F3D0;
+                border-radius: 10px;
+                padding: 6px 10px;
+                font-size: 12px;
+                font-weight: 600;
+            }
+        """)
+        self._hotkey_notice_timer = QTimer(self)
+        self._hotkey_notice_timer.setSingleShot(True)
+        self._hotkey_notice_timer.timeout.connect(self._hide_hotkey_notice)
 
         layout.addLayout(form_layout)
+        # 默认允许直接编辑，避免进入设置时短暂不可操作
+        self._inputs_armed = True
+        self._set_inputs_enabled(True)
 
         # 分割线
         line = QFrame()
@@ -223,6 +276,10 @@ class SettingsDialog(QDialog):
         self._drag_pos = QPoint()
         # --- 输入框通用样式 (填充风格，无边框) ---
         self._apply_dialog_theme_styles()
+        # 避免默认自动聚焦到第一个输入框：仅点击后才聚焦
+        for field in (self.base_input, self.random_input, self.wait_input):
+            field.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self.container.setFocus()
 
     def _make_label(self, text):
         lbl = QLabel(text)
@@ -243,15 +300,23 @@ class SettingsDialog(QDialog):
         try:
             base = int(self.base_input.text())
             rand = int(self.random_input.text())
-            if base < 0 or rand < 0: raise ValueError
+            wait_secs = int(self.wait_input.text())
+            if base < 0 or rand < 0 or wait_secs < 0:
+                raise ValueError
         except ValueError:
             QMessageBox.warning(self, self.msgs["apply_failed"], self.msgs["invalid_number_hint"])
             return
 
         self._result = {
-            "base": base, "rand": rand,
-            "start_vk": self.start_btn.current_vk, "start_txt": self.start_btn.text(),
-            "stop_vk": self.stop_btn.current_vk, "stop_txt": self.stop_btn.text(),
+            "base": base,
+            "rand": rand,
+            "wait": wait_secs,
+            "start_vk": self.start_btn.current_vk,
+            "start_mod": self.start_btn.current_mods,
+            "start_txt": self.start_btn.text(),
+            "continue_vk": self.continue_btn.current_vk,
+            "continue_mod": self.continue_btn.current_mods,
+            "continue_txt": self.continue_btn.text(),
             "lang": self.lang,
         }
         self.accept()
@@ -265,11 +330,22 @@ class SettingsDialog(QDialog):
         self.title_label.setText(self.msgs["settings_title"])
         self.base_label.setText(self.msgs["base_label"])
         self.random_label.setText(self.msgs["random_label"])
+        self.wait_label.setText(self.msgs["countdown_label"])
         self.start_label.setText(self.msgs["start_hotkey"])
-        self.stop_label.setText(self.msgs["stop_hotkey"])
+        self.continue_label.setText(self.msgs["continue_hotkey"])
         self.lang_label.setText(self.buttons["lang_toggle"])
         self.start_btn.apply_texts(self.buttons)
-        self.stop_btn.apply_texts(self.buttons)
+        self.continue_btn.apply_texts(self.buttons)
+        # 语言切换后若仍未激活输入，保持禁用状态
+        if not getattr(self, "_inputs_armed", True):
+            self._set_inputs_enabled(False)
+
+    def _set_inputs_enabled(self, enabled: bool):
+        self.base_input.setReadOnly(not enabled)
+        self.random_input.setReadOnly(not enabled)
+        self.wait_input.setReadOnly(not enabled)
+        self.start_btn.setEnabled(enabled)
+        self.continue_btn.setEnabled(enabled)
 
     # 允许无边框弹窗拖动
     def mousePressEvent(self, event):
@@ -292,42 +368,45 @@ class SettingsDialog(QDialog):
     def _apply_dialog_theme_styles(self):
         container_css = """
             QWidget#SettingsContainer {
-                background: #FFFFFF;
+                background: #F8FAFF;
                 border-radius: 20px;
-                border: 1px solid #F3F4F6;
+                border: 1px solid #E0E7FF;
             }
         """
-        title_css = "font-size: 20px; font-weight: 800; color: #111827;"
+        title_css = "font-size: 21px; font-weight: 900; color: #0F172A; font-family: 'Manrope','Segoe UI Variable Display','Segoe UI','Microsoft YaHei UI','PingFang SC',sans-serif;"
         input_style = """
             QLineEdit, QPushButton#HotkeyBtn {
-                background: #F3F4F6;
-                border: none;
+                background: #EEF2FF;
+                border: 1px solid #E0E7FF;
                 border-radius: 8px;
                 padding: 0px 12px;
                 font-size: 14px;
-                color: #374151;
-                font-weight: 600;
+                color: #0F172A;
+                font-weight: 700;
+                font-family: 'Manrope','Segoe UI Variable Display','Segoe UI','Microsoft YaHei UI','PingFang SC',sans-serif;
                 height: 34px;
             }
             QLineEdit:focus { 
-                background: #EFF6FF; 
-                color: #3B82F6; 
+                background: #E0E7FF; 
+                color: #1D4ED8; 
             }
             QPushButton#HotkeyBtn:hover {
-                background: #E5E7EB;
+                background: #E5ECFF;
             }
         """
         ok_css = """
             QPushButton {
-                background: #3B82F6; color: white; border-radius: 19px; font-weight: bold; padding: 0 28px;
+                background: #1D4ED8; color: white; border-radius: 19px; font-weight: 850; padding: 0 28px;
+                font-family: 'Manrope','Segoe UI Variable Display','Segoe UI','Microsoft YaHei UI','PingFang SC',sans-serif;
             }
-            QPushButton:hover { background: #2563EB; }
+            QPushButton:hover { background: #1E40AF; }
         """
         cancel_css = """
             QPushButton {
-                background: #F3F4F6; color: #6B7280; border-radius: 19px; font-weight: bold; padding: 0 28px;
+                background: #EFF6FF; color: #1F2937; border-radius: 19px; font-weight: 750; padding: 0 28px; border: 1px solid #E0E7FF;
+                font-family: 'Manrope','Segoe UI Variable Display','Segoe UI','Microsoft YaHei UI','PingFang SC',sans-serif;
             }
-            QPushButton:hover { background: #E5E7EB; color: #374151; }
+            QPushButton:hover { background: #E5ECFF; color: #0F172A; }
         """
 
         self.container.setStyleSheet(container_css)
@@ -336,10 +415,73 @@ class SettingsDialog(QDialog):
         self.ok_btn.setStyleSheet(ok_css)
         self.cancel_btn.setStyleSheet(cancel_css)
 
+    def _on_hotkey_record(self, btn: QPushButton, text: str):
+        # 简易防空检查
+        if text.strip().lower() in ("", "none", self.buttons.get("invalid_key", "")):
+            self._show_hotkey_notice(False, self.msgs.get("hotkey_invalid", "Invalid hotkey"))
+            return
+
+        # 冲突检测：如果其它按钮已使用同一组合，则清空其它按钮
+        current_combo = (btn.current_vk, btn.current_mods)
+        peers = [self.start_btn, self.continue_btn]
+        overridden = []
+        for peer in peers:
+            if peer is btn:
+                continue
+            if peer.current_vk and (peer.current_vk, peer.current_mods) == current_combo:
+                peer.current_vk = 0
+                peer.current_mods = 0
+                peer.setText(peer.none_text)
+                overridden.append(peer)
+
+        if overridden:
+            self._show_hotkey_notice(False, self.msgs.get("hotkey_override", "").format(key=text))
+        else:
+            self._show_hotkey_notice(True, self.msgs.get("hotkey_saved", "").format(key=text))
+
+    def _hide_hotkey_notice(self):
+        self.hotkey_notice.setVisible(False)
+        self.hotkey_notice.clear()
+
+    def _show_hotkey_notice(self, success: bool, message: str):
+        prefix = "✓ " if success else "⚠ "
+        self.hotkey_notice.setText(f"{prefix}{message}")
+        color = "#065F46" if success else "#92400E"
+        bg = "#ECFDF3" if success else "#FEF3C7"
+        border = "#A7F3D0" if success else "#FCD34D"
+        self.hotkey_notice.setStyleSheet(f"""
+            QLabel#HotkeyNotice {{
+                background: {bg};
+                color: {color};
+                border: 1px solid {border};
+                border-radius: 10px;
+                padding: 6px 10px;
+                font-size: 12px;
+                font-weight: 600;
+            }}
+        """)
+        self._position_hotkey_notice()
+        self.hotkey_notice.setVisible(True)
+        self._hotkey_notice_timer.start(2200)
+
+    def _position_hotkey_notice(self):
+        max_w = max(160, self.container.width() - 32)
+        self.hotkey_notice.setFixedWidth(min(max_w, 360))
+        self.hotkey_notice.adjustSize()
+        x = max(12, int((self.container.width() - self.hotkey_notice.width()) / 2))
+        y = 12
+        self.hotkey_notice.move(x, y)
+        self.hotkey_notice.raise_()
+
+    def resizeEvent(self, event):
+        if getattr(self, "hotkey_notice", None) and self.hotkey_notice.isVisible():
+            self._position_hotkey_notice()
+        super().resizeEvent(event)
+
 
 class MainWindow(QMainWindow):
     HK_START = 101
-    HK_STOP = 102
+    HK_CONTINUE = 102
 
     def __init__(self, base_override: int | None = None, random_override: int | None = None):
         super().__init__()
@@ -348,6 +490,10 @@ class MainWindow(QMainWindow):
         self.always_on_top = False
         self.base_override = base_override
         self.random_override = random_override
+        self.countdown_seconds = DEFAULT_COUNTDOWN_SEC
+        self.pending_text = ""
+        self.pending_offset = 0
+        self._hold_finish = False
 
         self._spinner_timer = QTimer(self)
         self._spinner_frames = ["|", "/", "-", "\\"]
@@ -367,7 +513,7 @@ class MainWindow(QMainWindow):
 
     def _init_window(self):
         self.setWindowTitle("miHoYo Tool Pro")
-        self.resize(360, 240)
+        self.resize(340, 240)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowSystemMenuHint | Qt.WindowType.WindowMinimizeButtonHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -387,8 +533,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
 
         layout = QVBoxLayout(self.main_widget)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
 
         # 阴影效果
         shadow = QGraphicsDropShadowEffect(self)
@@ -403,8 +549,8 @@ class MainWindow(QMainWindow):
         status_card = QWidget()
         status_card.setObjectName("StatusCard")
         status_layout = QVBoxLayout(status_card)
-        status_layout.setContentsMargins(16, 20, 16, 20)
-        status_layout.setSpacing(10)
+        status_layout.setContentsMargins(16, 16, 16, 16)
+        status_layout.setSpacing(8)
 
         status_row = QHBoxLayout()
         status_row.setSpacing(8)
@@ -424,38 +570,48 @@ class MainWindow(QMainWindow):
         status_row.addWidget(self.status_label)
 
         self.progress_bar = QProgressBar()
-        self.progress_bar.setTextVisible(False)
-        self.progress_bar.setFixedHeight(16)
+        self.progress_bar.setTextVisible(True)
+        self.progress_bar.setFormat("%p%")
+        self.progress_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress_bar.setFixedHeight(18)
 
         status_layout.addLayout(status_row)
         status_layout.addWidget(self.progress_bar)
 
         layout.addWidget(status_card)
 
-        # --- 按钮区域 ---
+        # --- 控制卡片 ---
+        control_card = QWidget()
+        control_card.setObjectName("ControlCard")
+        control_layout = QVBoxLayout(control_card)
+        control_layout.setContentsMargins(16, 12, 16, 12)
+        control_layout.setSpacing(8)
+
         btn_container = QWidget()
-        btn_row = QHBoxLayout(btn_container)
-        btn_row.setSpacing(16) # 间距适中
-        btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        btn_layout = QHBoxLayout(btn_container)
+        btn_layout.setSpacing(12)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
 
         self.start_btn = QPushButton()
         self.start_btn.setObjectName("StartBtn")
-        self.start_btn.setFixedHeight(44) # 高度增加到 44px
-        self.start_btn.setFixedWidth(140)
+        self.start_btn.setFixedHeight(44)
+        self.start_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.start_btn.clicked.connect(self.start_task)
 
-        self.stop_btn = QPushButton()
-        self.stop_btn.setObjectName("StopBtn")
-        self.stop_btn.setFixedHeight(44)
-        self.stop_btn.setFixedWidth(140)
-        self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.stop_btn.setEnabled(False)
-        self.stop_btn.clicked.connect(self.stop_task)
+        self.toggle_btn = QPushButton()
+        self.toggle_btn.setObjectName("ContinueBtn")
+        self.toggle_btn.setFixedHeight(44)
+        self.toggle_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle_btn.setEnabled(True)
+        self.toggle_btn.clicked.connect(self._on_toggle_clicked)
 
-        btn_row.addWidget(self.start_btn)
-        btn_row.addWidget(self.stop_btn)
-        layout.addWidget(btn_container, 0, Qt.AlignmentFlag.AlignCenter)
+        btn_layout.addWidget(self.start_btn)
+        btn_layout.addWidget(self.toggle_btn)
+        control_layout.addWidget(btn_container)
+
+        layout.addWidget(control_card, 0)
 
         layout.addStretch()
 
@@ -586,16 +742,26 @@ class MainWindow(QMainWindow):
         painter.end()
         return QIcon(pm)
 
+    def _load_svg_icon(self, filename: str, fallback: QIcon | None = None) -> QIcon:
+        path = os.path.join("svg", filename)
+        if os.path.exists(path):
+            return QIcon(path)
+        return fallback or QIcon()
+
     def _refresh_icons(self):
         color = self._icon_color()
-        pin_color = QColor("#3B82F6") if self.always_on_top else color
-        self.pin_btn.setIcon(self._make_icon("pin", pin_color))
-        self.settings_btn.setIcon(self._make_icon("settings", color))
-        self.min_btn.setIcon(self._make_icon("minimize", color))
-        self.close_btn.setIcon(self._make_icon("close", color))
+        pin_icon_name = "push-pin.svg" if self.always_on_top else "push-pin-simple.svg"
+        pin_icon = self._load_svg_icon(pin_icon_name, self._make_icon("pin", color))
+        settings_icon = self._load_svg_icon("gear.svg", self._make_icon("settings", color))
+        min_icon = self._load_svg_icon("arrows-in-simple.svg", self._make_icon("minimize", color))
+        close_icon = self._load_svg_icon("x.svg", self._make_icon("close", color))
 
-        # 【关键修改】图标显示尺寸从 18 增加到 22
-        icon_size = QSize(22, 22)
+        self.pin_btn.setIcon(pin_icon)
+        self.settings_btn.setIcon(settings_icon)
+        self.min_btn.setIcon(min_icon)
+        self.close_btn.setIcon(close_icon)
+
+        icon_size = QSize(20, 20)
         for btn in [self.pin_btn, self.settings_btn, self.min_btn, self.close_btn]:
             btn.setIconSize(icon_size)
             btn.setText("")
@@ -610,19 +776,59 @@ class MainWindow(QMainWindow):
         self.always_on_top = bool(self.settings.value("pin", False, type=bool))
 
         self.base_delay = self.base_override if self.base_override is not None else int(
-            self.settings.value("base", DEFAULT_BASE_DELAY_MS))
+            self.settings.value("base", DEFAULT_BASE_DELAY_MS, type=int))
         self.random_delay = self.random_override if self.random_override is not None else int(
-            self.settings.value("float", DEFAULT_RANDOM_DELAY_MS))
+            self.settings.value("float", DEFAULT_RANDOM_DELAY_MS, type=int))
+        self.countdown_seconds = int(self.settings.value("countdown", DEFAULT_COUNTDOWN_SEC, type=int))
 
-        self.start_hotkey_vk = int(self.settings.value("start_vk", DEFAULT_START_HOTKEY[1]))
+        self.start_hotkey_vk = int(self.settings.value("start_vk", DEFAULT_START_HOTKEY[1], type=int))
+        self.start_hotkey_mod = int(self.settings.value("start_mod", DEFAULT_START_HOTKEY[2], type=int))
         self.start_hotkey_text = str(self.settings.value("start_txt", DEFAULT_START_HOTKEY[0]))
-        self.stop_hotkey_vk = int(self.settings.value("stop_vk", DEFAULT_STOP_HOTKEY[1]))
-        self.stop_hotkey_text = str(self.settings.value("stop_txt", DEFAULT_STOP_HOTKEY[0]))
+        self.continue_hotkey_vk = int(self.settings.value("continue_vk", DEFAULT_CONTINUE_HOTKEY[1], type=int))
+        self.continue_hotkey_mod = int(self.settings.value("continue_mod", DEFAULT_CONTINUE_HOTKEY[2], type=int))
+        self.continue_hotkey_text = str(self.settings.value("continue_txt", DEFAULT_CONTINUE_HOTKEY[0]))
+        # 暂停/继续统一同一组合键，保持 stop 文案为同一键
+        self.stop_hotkey_vk = self.continue_hotkey_vk
+        self.stop_hotkey_mod = self.continue_hotkey_mod
+        self.stop_hotkey_text = self.continue_hotkey_text
 
         self._register_hotkeys()
         self._apply_theme()
         self._apply_language_texts(initial=True)
         self._apply_pin(self.always_on_top)
+        self._update_toggle_button_text()
+
+    def _launch_worker(self, text: str, start_offset: int = 0, resume: bool = False):
+        if self.worker and self.worker.isRunning():
+            return
+        if not text:
+            self.status_label.setText(self.s("empty_clipboard"))
+            return
+        total_len = len(text)
+        initial_progress = int((start_offset / total_len) * 100) if total_len else 0
+        self.pending_offset = start_offset
+
+        self.start_btn.setEnabled(True)
+        self.toggle_btn.setEnabled(True)
+        state_key = "continuing" if resume else "injecting"
+        self.status_label.setText(self.s(state_key))
+        self._start_spinner()
+        self._set_progress_target(initial_progress, instant=True)
+
+        self.worker = PasteWorker(text, self.base_delay, self.random_delay, start_offset, self.countdown_seconds)
+        self.worker.progress_signal.connect(self._set_progress_target)
+        self.worker.status_signal.connect(self._set_status_text)
+        self.worker.finished_signal.connect(self.on_finished)
+        logger.info(
+            "Task started%s: %d chars, base=%dms random=%dms offset=%d wait=%ds",
+            " (resume)" if resume else "",
+            len(text),
+            self.base_delay,
+            self.random_delay,
+            start_offset,
+            self.countdown_seconds,
+        )
+        self.worker.start()
 
     def start_task(self):
         if self.worker and self.worker.isRunning(): return
@@ -631,41 +837,68 @@ class MainWindow(QMainWindow):
             self.status_label.setText(self.s("empty_clipboard"))
             logger.info("Start aborted: clipboard empty")
             return
+        self._hold_finish = False
         text = text.replace('\r\n', '\n')
-        base = self.base_delay
-        float_val = self.random_delay
-        self.start_btn.setEnabled(False)
-        self.start_btn.setText(f"{self.b('start')} ({self.start_hotkey_text})")
-        self.stop_btn.setEnabled(True)
-        self.status_label.setText(self.s("injecting"))
-        self._start_spinner()
-        self._set_progress_target(0, instant=True)
-        self.worker = PasteWorker(text, base, float_val)
-        self.worker.progress_signal.connect(self._set_progress_target)
-        self.worker.status_signal.connect(self._set_status_text)
-        self.worker.finished_signal.connect(self.on_finished)
-        logger.info("Task started: %d chars, base=%dms random=%dms", len(text), base, float_val)
-        self.worker.start()
+        self.pending_text = text
+        self.pending_offset = 0
+        self._launch_worker(text, start_offset=0, resume=False)
+        self._update_toggle_button_text()
+
+    def continue_task(self):
+        if self.worker and self.worker.isRunning():
+            return
+        if not self.pending_text or self.pending_offset >= len(self.pending_text):
+            self.status_label.setText(self.s("no_pending"))
+            return
+        self._hold_finish = False
+        self._launch_worker(self.pending_text, start_offset=self.pending_offset, resume=True)
+        self._update_toggle_button_text()
 
     def stop_task(self):
         if self.worker and self.worker.isRunning():
             self.worker.stop()
             self._set_status_value("stopping")
             self._start_spinner()
+            self.toggle_btn.setEnabled(False)
             logger.info("Stop requested by user")
 
     def on_finished(self):
+        finished_worker = self.worker
+        self.worker = None
+
         self.start_btn.setEnabled(True)
-        self.start_btn.setText(f"{self.b('start')} ({self.start_hotkey_text})")
-        self.stop_btn.setEnabled(False)
-        self._set_progress_target(0, instant=True)
-        status = self.status_label.text()
-        if status in (self.s("interrupted"), self.s("stopped")):
-            self.status_label.setText(self.s("stopped_by_user"))
+        self.toggle_btn.setEnabled(True)
+        self._stop_spinner()
+
+        if finished_worker:
+            if finished_worker.completed:
+                self.pending_text = ""
+                self.pending_offset = 0
+                # 任务完成时保持 100%，避免立刻归零
+                self._set_progress_target(100, instant=True)
+                self.status_label.setText(self.s("done"))
+                self._hold_finish = True
+            else:
+                if finished_worker.next_offset < len(finished_worker.content):
+                    self.pending_text = finished_worker.content
+                    self.pending_offset = finished_worker.next_offset
+                    progress = int((self.pending_offset / len(self.pending_text)) * 100)
+                    self._set_progress_target(progress, instant=True)
+                    self.status_label.setText(self.s("stopped_by_user"))
+                else:
+                    self.pending_text = ""
+                    self.pending_offset = 0
+                    self._set_progress_target(0, instant=True)
+                    self.status_label.setText(self.s("stopped_by_user"))
+                self._hold_finish = False
         else:
             self.status_label.setText(self.s("done"))
-        self._stop_spinner()
-        logger.info("Task finished; status=%s", status)
+            self._hold_finish = True
+
+        can_resume = bool(self.pending_text and self.pending_offset < len(self.pending_text))
+        self.start_btn.setEnabled(True)
+        self._update_toggle_button_text()
+        logger.info("Task finished; resume_available=%s", can_resume)
 
     def nativeEvent(self, event_type, message):
         if event_type == b"windows_generic_MSG" or event_type == "windows_generic_MSG":
@@ -673,8 +906,8 @@ class MainWindow(QMainWindow):
             if msg.message == 0x0312:  # WM_HOTKEY
                 if msg.wParam == self.HK_START:
                     self.start_task()
-                elif msg.wParam == self.HK_STOP:
-                    self.stop_task()
+                elif msg.wParam == self.HK_CONTINUE:
+                    self._on_toggle_clicked()
         return super().nativeEvent(event_type, message)
 
     def mousePressEvent(self, event):
@@ -694,85 +927,153 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.settings.setValue("base", self.base_delay)
         self.settings.setValue("float", self.random_delay)
+        self.settings.setValue("countdown", self.countdown_seconds)
         self.settings.setValue("lang", self.lang)
-        self.settings.setValue("theme", self.theme)
         self.settings.setValue("pin", self.always_on_top)
+        self.settings.setValue("start_vk", self.start_hotkey_vk)
+        self.settings.setValue("start_mod", self.start_hotkey_mod)
+        self.settings.setValue("start_txt", self.start_hotkey_text)
+        self.settings.setValue("continue_vk", self.continue_hotkey_vk)
+        self.settings.setValue("continue_mod", self.continue_hotkey_mod)
+        self.settings.setValue("continue_txt", self.continue_hotkey_text)
         WinSystem.unregister_hotkey(int(self.winId()), self.HK_START)
-        WinSystem.unregister_hotkey(int(self.winId()), self.HK_STOP)
+        WinSystem.unregister_hotkey(int(self.winId()), self.HK_CONTINUE)
         event.accept()
 
     def _register_hotkeys(self):
-        if self.start_hotkey_vk and not WinSystem.register_hotkey(int(self.winId()), self.HK_START,
-                                                                  self.start_hotkey_vk):
+        if self.start_hotkey_vk and not WinSystem.register_hotkey(
+                int(self.winId()), self.HK_START, self.start_hotkey_vk, self.start_hotkey_mod):
             logger.warning("Hotkey restore failed: %s(%s)", self.start_hotkey_text, hex(self.start_hotkey_vk))
-        if self.stop_hotkey_vk and not WinSystem.register_hotkey(int(self.winId()), self.HK_STOP, self.stop_hotkey_vk):
-            logger.warning("Hotkey restore failed: %s(%s)", self.stop_hotkey_text, hex(self.stop_hotkey_vk))
+        if self.continue_hotkey_vk and not WinSystem.register_hotkey(
+                int(self.winId()), self.HK_CONTINUE, self.continue_hotkey_vk, self.continue_hotkey_mod):
+            logger.warning("Hotkey restore failed: %s(%s)", self.continue_hotkey_text, hex(self.continue_hotkey_vk))
 
-    def _apply_settings(self, base_delay: int, random_delay: int, start_vk: int, start_txt: str, stop_vk: int,
-                        stop_txt: str):
+    def _apply_settings(self, base_delay: int, random_delay: int, countdown: int,
+                        start_vk: int, start_mod: int, start_txt: str,
+                        continue_vk: int, continue_mod: int, continue_txt: str):
         WinSystem.unregister_hotkey(int(self.winId()), self.HK_START)
-        WinSystem.unregister_hotkey(int(self.winId()), self.HK_STOP)
+        WinSystem.unregister_hotkey(int(self.winId()), self.HK_CONTINUE)
 
-        if start_vk and not WinSystem.register_hotkey(int(self.winId()), self.HK_START, start_vk):
-            QMessageBox.warning(self, self.msg("hotkey_conflict_title"), self.msg("hotkey_conflict"))
-            WinSystem.register_hotkey(int(self.winId()), self.HK_START, self.start_hotkey_vk)
-            WinSystem.register_hotkey(int(self.winId()), self.HK_STOP, self.stop_hotkey_vk)
-            return
-        if stop_vk and not WinSystem.register_hotkey(int(self.winId()), self.HK_STOP, stop_vk):
-            QMessageBox.warning(self, self.msg("hotkey_conflict_title"), self.msg("hotkey_conflict"))
-            WinSystem.register_hotkey(int(self.winId()), self.HK_START, self.start_hotkey_vk)
-            WinSystem.register_hotkey(int(self.winId()), self.HK_STOP, self.stop_hotkey_vk)
-            return
+        old_values = (
+            self.start_hotkey_vk, self.start_hotkey_mod,
+            self.continue_hotkey_vk, self.continue_hotkey_mod
+        )
+
+        def restore():
+            if old_values[0]:
+                WinSystem.register_hotkey(int(self.winId()), self.HK_START, old_values[0], old_values[1])
+            if old_values[2]:
+                WinSystem.register_hotkey(int(self.winId()), self.HK_CONTINUE, old_values[2], old_values[3])
+
+        actions = [
+            {"name": "start", "vk": start_vk, "mod": start_mod, "txt": start_txt, "id": self.HK_START},
+            {"name": "continue", "vk": continue_vk, "mod": continue_mod, "txt": continue_txt, "id": self.HK_CONTINUE},
+        ]
+
+        # 冲突静默覆盖：后出现的功能占用该组合，之前的被清空（置为 None）
+        used = {}
+        for idx, act in enumerate(actions):
+            combo = (act["vk"], act["mod"])
+            if not act["vk"]:
+                continue
+            if combo in used:
+                prev_idx = used[combo]
+                actions[prev_idx]["vk"] = 0
+                actions[prev_idx]["mod"] = 0
+                actions[prev_idx]["txt"] = self.b("none")
+            used[combo] = idx
+
+        for act in actions:
+            if act["vk"] and not WinSystem.register_hotkey(int(self.winId()), act["id"], act["vk"], act["mod"]):
+                self._show_hotkey_notice(False, self.msg("hotkey_conflict_runtime", **{"key": act["txt"]}))
+                restore()
+                return
+
+        start_vk, start_mod, start_txt = actions[0]["vk"], actions[0]["mod"], actions[0]["txt"]
+        continue_vk, continue_mod, continue_txt = actions[1]["vk"], actions[1]["mod"], actions[1]["txt"]
 
         self.base_delay = base_delay
         self.random_delay = random_delay
+        self.countdown_seconds = countdown
         self.start_hotkey_vk = start_vk
+        self.start_hotkey_mod = start_mod
         self.start_hotkey_text = start_txt
-        self.stop_hotkey_vk = stop_vk
-        self.stop_hotkey_text = stop_txt
+        self.continue_hotkey_vk = continue_vk
+        self.continue_hotkey_mod = continue_mod
+        self.continue_hotkey_text = continue_txt
+        # 暂停/继续统一同一按键
+        self.stop_hotkey_vk = continue_vk
+        self.stop_hotkey_mod = continue_mod
+        self.stop_hotkey_text = continue_txt
 
         self.settings.setValue("base", self.base_delay)
         self.settings.setValue("float", self.random_delay)
+        self.settings.setValue("countdown", self.countdown_seconds)
         self.settings.setValue("start_vk", self.start_hotkey_vk)
+        self.settings.setValue("start_mod", self.start_hotkey_mod)
         self.settings.setValue("start_txt", self.start_hotkey_text)
-        self.settings.setValue("stop_vk", self.stop_hotkey_vk)
-        self.settings.setValue("stop_txt", self.stop_hotkey_text)
+        self.settings.setValue("continue_vk", self.continue_hotkey_vk)
+        self.settings.setValue("continue_mod", self.continue_hotkey_mod)
+        self.settings.setValue("continue_txt", self.continue_hotkey_text)
 
         self._apply_language_texts()
 
     def _open_settings(self):
+        # 防止误触：先停用快捷键和主要控制
+        WinSystem.unregister_hotkey(int(self.winId()), self.HK_START)
+        WinSystem.unregister_hotkey(int(self.winId()), self.HK_CONTINUE)
+        start_enabled = self.start_btn.isEnabled()
+        toggle_enabled = self.toggle_btn.isEnabled()
+        self.start_btn.setEnabled(False)
+        self.toggle_btn.setEnabled(False)
+
         dlg = SettingsDialog(
             self,
             self.lang,
             self.theme,
             self.base_delay,
             self.random_delay,
-            (self.start_hotkey_text, self.start_hotkey_vk),
-            (self.stop_hotkey_text, self.stop_hotkey_vk),
+            self.countdown_seconds,
+            (self.start_hotkey_text, self.start_hotkey_vk, self.start_hotkey_mod),
+            (self.continue_hotkey_text, self.continue_hotkey_vk, self.continue_hotkey_mod),
         )
-        if dlg.exec() == QDialog.DialogCode.Accepted:
-            res = dlg.get_result()
-            if res:
-                self._apply_settings(
-                    res["base"],
-                    res["rand"],
-                    res["start_vk"],
-                    res["start_txt"],
-                    res["stop_vk"],
-                    res["stop_txt"],
-                )
-                if res.get("lang") and res["lang"] != self.lang:
-                    self.lang = res["lang"]
-                    self.settings.setValue("lang", self.lang)
-                    self._apply_language_texts()
+        try:
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                res = dlg.get_result()
+                if res:
+                    self._apply_settings(
+                        res["base"],
+                        res["rand"],
+                        res["wait"],
+                        res["start_vk"],
+                        res["start_mod"],
+                        res["start_txt"],
+                        res["continue_vk"],
+                        res["continue_mod"],
+                        res["continue_txt"],
+                    )
+                    if res.get("lang") and res["lang"] != self.lang:
+                        self.lang = res["lang"]
+                        self.settings.setValue("lang", self.lang)
+                        self._apply_language_texts()
+            else:
+                # 取消时恢复旧快捷键注册
+                self._register_hotkeys()
+        finally:
+            # 恢复按钮可用状态，结合当前运行状态
+            worker_running = self.worker and self.worker.isRunning()
+            can_resume = bool(self.pending_text and self.pending_offset < len(self.pending_text))
+            self.start_btn.setEnabled(start_enabled and not worker_running)
+            self.toggle_btn.setEnabled(toggle_enabled or worker_running or can_resume)
+            self._update_toggle_button_text()
 
     def _start_spinner(self):
         if self._spinner_active:
             return
-        self._spinner_active = True
-        self._spinner_timer.timeout.connect(self._tick_spinner)
-        self._spinner_timer.start(120)
-        self.status_spinner.setVisible(True)
+            self._spinner_active = True
+            self._spinner_timer.timeout.connect(self._tick_spinner)
+            self._spinner_timer.start(120)
+            self.status_spinner.setVisible(True)
 
     def _stop_spinner(self):
         if not self._spinner_active:
@@ -826,9 +1127,15 @@ class MainWindow(QMainWindow):
         self.settings_btn.setToolTip(self.b("settings"))
 
         if not self.worker or not self.worker.isRunning():
-            self.status_label.setText(self.s("waiting"))
-            self.start_btn.setText(f"{self.b('start')} ({self.start_hotkey_text})")
-        self.stop_btn.setText(f"{self.b('stop')} ({self.stop_hotkey_text})")
+            if self.pending_text and self.pending_offset < len(self.pending_text):
+                self.status_label.setText(self.s("resume_ready"))
+            elif self._hold_finish:
+                self.status_label.setText(self.s("done"))
+            elif not self._hold_finish:
+                self.status_label.setText(self.s("waiting"))
+                self._set_progress_target(0, instant=True)
+                self._hold_finish = False
+        self._update_toggle_button_text()
 
     def _toggle_theme(self):
         # 暂不支持暗色主题，保持为 light
@@ -846,14 +1153,15 @@ class MainWindow(QMainWindow):
         self.always_on_top = flag
         if hasattr(self, "pin_btn"):
             self.pin_btn.setChecked(flag)
-            base_color = self._icon_color()
-            pin_color = QColor("#3B82F6") if self.always_on_top else base_color
-            self.pin_btn.setIcon(self._make_icon("pin", pin_color))
-        current = bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
-        if current != flag:
-            # 使用 Win32 API 避免窗口闪烁
-            WinSystem.set_topmost(int(self.winId()), flag)
+            self._refresh_icons()
+
+        # 同步 Qt flag 与 Win32，确保取消置顶可靠
+        if bool(self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint) != flag:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, flag)
             self.show()
+
+        WinSystem.set_topmost(int(self.winId()), flag)
+        self.show()
 
     def l(self, key: str):
         return get_text(self.lang, "labels", key)
@@ -870,18 +1178,43 @@ class MainWindow(QMainWindow):
     def wb(self, key: str):
         return get_text(self.lang, "window_buttons", key)
 
+    def _show_hotkey_notice(self, success: bool, message: str):
+        if success:
+            self.status_label.setText(message)
+            return
+        QMessageBox.warning(self, self.msg("hotkey_conflict_title"), message)
+
     def window_text(self):
         return LANGS.get(self.lang, LANGS["zh"]).get("window_title", "miHoYo Tool Pro")
 
     def title_text(self):
         return LANGS.get(self.lang, LANGS["zh"]).get("title", "miHoYo Tool")
 
-    def _update_hotkey_hint(self):
-        messages = LANGS.get(self.lang, LANGS["zh"]).get("messages", {})
-        if "hotkey_hint" in messages:
-            self.hotkey_hint.setText(self.msg("hotkey_hint", start=self.start_hotkey_text, stop=self.stop_hotkey_text))
+    def _update_toggle_button_text(self):
+        running = self.worker and self.worker.isRunning()
+        can_resume = bool(self.pending_text and self.pending_offset < len(self.pending_text))
+        # 暂停/继续共用同一热键，图标随状态变化
+        text = self.continue_hotkey_text
+        if can_resume and not running:
+            icon = self._load_svg_icon("play.svg", self._make_icon("minimize", QColor("#FFFFFF")))
         else:
-            self.hotkey_hint.setText(f"{self.start_hotkey_text} / {self.stop_hotkey_text}")
+            icon = self._load_svg_icon("pause.svg", self._make_icon("minimize", QColor("#FFFFFF")))
+
+        self.toggle_btn.setText(text)
+        self.toggle_btn.setIcon(icon)
+        self.toggle_btn.setIconSize(QSize(20, 20))
+        self.start_btn.setText(self.start_hotkey_text)
+        self.start_btn.setIcon(self._load_svg_icon("rocket-launch.svg", self._make_icon("minimize", QColor("#FFFFFF"))))
+        self.start_btn.setIconSize(QSize(20, 20))
+
+    def _on_toggle_clicked(self):
+        if self.worker and self.worker.isRunning():
+            self.stop_task()  # 充当“暂停”
+            return
+        if self.pending_text and self.pending_offset < len(self.pending_text):
+            self.continue_task()
+        else:
+            self.start_task()
 
     def _set_status_value(self, key: str):
         self.status_label.setText(self.s(key))
